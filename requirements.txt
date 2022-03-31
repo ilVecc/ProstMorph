@@ -1,0 +1,5 @@
+tensorflow==2.7.0
+SimpleITK==2.1.1
+matplotlib==3.5.1
+numpy==1.22.2
+voxelmorph
