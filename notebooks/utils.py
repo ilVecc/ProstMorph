@@ -3,6 +3,7 @@ from pathlib import Path
 
 import SimpleITK as sitk
 import numpy as np
+import tensorflow as tf
 
 
 class ImageLoader:
@@ -153,3 +154,149 @@ class DatasetCreator:
                 _, _, _, _ = data['mr_image'], data['mr_seg'], data['us_image'], data['us_seg']
             except Exception as ex:
                 print(f"File {data_path.name} not well compressed!")
+
+
+class SmartDataGenerator(tf.keras.utils.Sequence):
+    """Generates data for Keras"""
+    def __init__(self, data_paths, dim, batch_size=32, shuffle=True, seed=None):
+        """Initialization"""
+        self.dim = dim
+        self.batch_size = batch_size
+        self.shuffle = shuffle
+        self.seed = seed
+
+        self.patients_cases = data_paths
+
+        self.indexes = np.arange(len(self.patients_cases))
+        self.on_epoch_end()
+
+    def __len__(self):
+        """Denotes the number of batches per epoch"""
+        return int(np.floor(len(self.patients_cases) / self.batch_size))
+
+    def __getitem__(self, index):
+        """Generate one batch of data"""
+        # Generate indexes of the batch
+        indexes = self.indexes[index*self.batch_size:(index+1)*self.batch_size]
+
+        # Find list of IDs
+        patients_list = [self.patients_cases[k] for k in indexes]
+
+        # Generate data
+        inputs, outputs = self.__data_generation(patients_list)
+
+        return inputs, outputs
+
+    def on_epoch_end(self):
+        """Updates indexes after each epoch"""
+        if self.shuffle:
+            if self.seed is not None:
+                np.random.seed(self.seed)
+            np.random.shuffle(self.indexes)
+
+    def __data_generation(self, patients_list):
+        """Generates data containing batch_size samples"""
+        # X : (n_samples, *dim, n_channels)
+        moving_images = np.zeros(shape=(self.batch_size, *self.dim, 1))
+        fixed_images = np.zeros(shape=(self.batch_size, *self.dim, 1))
+        moving_images_seg = np.zeros(shape=(self.batch_size, *[d // 2 for d in self.dim], 1))
+        fixed_images_seg = np.zeros(shape=(self.batch_size, *[d // 2 for d in self.dim], 1))
+        zero_phi = np.zeros(shape=(self.batch_size, *self.dim, len(self.dim)))
+
+        # Generate data
+        for i, data_path in enumerate(patients_list):
+            mr_image_crop, mr_prostate_crop, us_image_crop, us_prostate_crop = SmartDataGenerator.single_load(data_path)
+            # images need to be of the size [batch_size, H, W, D]
+            moving_images[i, ..., 0] = mr_image_crop
+            fixed_images[i, ..., 0] = us_image_crop
+            moving_images_seg[i, ..., 0] = mr_prostate_crop[::2, ::2, ::2]
+            fixed_images_seg[i, ..., 0] = us_prostate_crop[::2, ::2, ::2]
+            # print(f"(loaded {data_path.name})")
+
+        inputs = [moving_images, fixed_images, moving_images_seg]
+
+        # prepare outputs (the 'true' moved image):
+        # of course, we don't have this, but we know we want to compare
+        # the resulting moved image with the fixed image.
+        # we also wish to penalize the deformation field.
+        outputs = [fixed_images, zero_phi, fixed_images_seg]
+
+        return inputs, outputs
+
+    @staticmethod
+    def single_load(path):
+        data = np.load(path)
+        mr_image, mr_prostate = data['mr_image'], data['mr_seg']
+        us_image, us_prostate = data['us_image'], data['us_seg']
+        return mr_image, mr_prostate, us_image, us_prostate
+
+    @staticmethod
+    def single_input(path):
+        mr_image, mr_prostate, us_image, us_prostate = SmartDataGenerator.single_load(path)
+        return [mr_image, us_image, mr_prostate]
+
+
+class MIND_SSC:
+    def pdist_squared(self, x):
+        xx = (x**2).sum(dim=1).unsqueeze(2)
+        yy = xx.permute(0, 2, 1)
+        dist = xx + yy - 2.0 * tf.matmul(x.permute(0, 2, 1), x)
+        dist[dist != dist] = 0
+        dist = tf.clip_by_value(dist, 0.0, np.inf)
+        return dist
+
+    def MINDSSC(self, img, radius=2, dilation=2):
+        # see http://mpheinrich.de/pub/miccai2013_943_mheinrich.pdf for details on the MIND-SSC descriptor
+
+        # kernel size
+        kernel_size = radius * 2 + 1
+
+        # define start and end locations for self-similarity pattern
+        six_neighbourhood = tf.Tensor([[0, 1, 1],
+                                       [1, 1, 0],
+                                       [1, 0, 1],
+                                       [1, 1, 2],
+                                       [2, 1, 1],
+                                       [1, 2, 1]], dtype=tf.int64)
+
+        # squared distances
+        dist = tf.squeeze(self.pdist_squared(tf.expand_dims(tf.transpose(six_neighbourhood), axis=0)), axis=0)
+
+        # define comparison mask
+        x, y = tf.meshgrid(tf.range(6), tf.range(6))
+        mask = (x > y) & (dist == 2)
+
+        # build kernel
+        idx_shift1 = tf.expand_dims(six_neighbourhood, 1).repeat(1, 6, 1).reshape(-1, 3)[mask, :]
+        mshift1 = tf.zeros(shape=(12, 1, 3, 3, 3))
+        mshift1.view(-1)[tf.range(12) * 27 + idx_shift1[:, 0] * 9 + idx_shift1[:, 1] * 3 + idx_shift1[:, 2]] = 1
+
+        idx_shift2 = tf.expand_dims(six_neighbourhood, 0).repeat(6, 1, 1).reshape(-1, 3)[mask, :]
+        mshift2 = tf.zeros(shape=(12, 1, 3, 3, 3))
+        mshift2.view(-1)[tf.range(12) * 27 + idx_shift2[:, 0] * 9 + idx_shift2[:, 1] * 3 + idx_shift2[:, 2]] = 1
+
+        rpad1 = tf.pad(img, paddings=dilation, mode='SYMMETRIC')
+
+        # compute patch-ssd
+        ssd = tf.nn.avg_pool3d(
+            tf.pad(
+                (tf.nn.conv3d(rpad1, filters=mshift1, dilation=dilation) - tf.nn.conv3d(rpad1, filters=mshift2, dilation=dilation)) ** 2,
+                paddings=radius,
+                mode='SYMMETRIC'),
+            kernel_size,
+            stride=1)
+
+        # MIND equation
+        mind = ssd - tf.reduce_min(ssd, axis=1, keepdims=True)[0]
+        mind_var = tf.reduce_mean(mind, axis=1, keepdims=True)
+        mind_var = tf.clip_by_value(mind_var, mind_var.mean()*0.001, mind_var.mean()*1000)
+        mind /= mind_var
+        mind = tf.exp(-mind)
+
+        # permute to have same ordering as C++ code
+        mind = mind[:, tf.Tensor([6, 8, 1, 11, 2, 10, 0, 7, 9, 4, 5, 3], dtype=tf.int64), :, :, :]
+
+        return mind
+
+    def mind_loss(self, x, y):
+        return tf.reduce_mean((self.MINDSSC(x) - self.MINDSSC(y)) ** 2)
