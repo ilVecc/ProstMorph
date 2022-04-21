@@ -1,4 +1,5 @@
 import itertools
+import re
 from pathlib import Path
 
 import SimpleITK as sitk
@@ -11,8 +12,8 @@ class ImageLoader:
     @staticmethod
     def sitk_to_numpy(image, normalize=True):
         # might want to read  http://simpleitk.org/SimpleITK-Notebooks/01_Image_Basics.html
-        # this changes (x,y,z) to (z,y,x), which requires a  .transpose() , but since we applied a previous change to RAS we don't need it here and we simply
-        # change the orientation flipping the axes
+        # this changes (x,y,z) to (z,y,x), which requires a  .transpose() , but since we applied a previous
+        # change to RAS we don't need it here and we simply change the orientation flipping the axes
         np_image = sitk.GetArrayFromImage(image)
         np_image = np.flip(np_image, axis=(0, 1, 2))
         np_image = np_image.astype(float) / np_image.max() if normalize else np_image  # default minimum is 0
@@ -176,6 +177,10 @@ class SmartDataGenerator(tf.keras.utils.Sequence):
 
     def __getitem__(self, index):
         """Generate one batch of data"""
+        inputs, outputs, _, _, _ = self(index, output_targets=False)
+        return inputs, outputs
+
+    def __call__(self, index, output_targets=True):
         # Generate indexes of the batch
         indexes = self.indexes[index*self.batch_size:(index+1)*self.batch_size]
 
@@ -183,9 +188,9 @@ class SmartDataGenerator(tf.keras.utils.Sequence):
         patients_list = [self.patients_cases[k] for k in indexes]
 
         # Generate data
-        inputs, outputs = self.__data_generation(patients_list)
+        inputs, outputs, mr_targets, us_targets = self.__data_generation(patients_list, output_targets=output_targets)
 
-        return inputs, outputs
+        return inputs, outputs, mr_targets, us_targets, patients_list
 
     def on_epoch_end(self):
         """Updates indexes after each epoch"""
@@ -194,7 +199,7 @@ class SmartDataGenerator(tf.keras.utils.Sequence):
                 np.random.seed(self.seed)
             np.random.shuffle(self.indexes)
 
-    def __data_generation(self, patients_list):
+    def __data_generation(self, patients_list, output_targets=False):
         """Generates data containing batch_size samples"""
         # X : (n_samples, *dim, n_channels)
         moving_images = np.zeros(shape=(self.batch_size, *self.dim, 1))
@@ -202,16 +207,35 @@ class SmartDataGenerator(tf.keras.utils.Sequence):
         moving_images_seg = np.zeros(shape=(self.batch_size, *[d // 2 for d in self.dim], 1))
         fixed_images_seg = np.zeros(shape=(self.batch_size, *[d // 2 for d in self.dim], 1))
         zero_phi = np.zeros(shape=(self.batch_size, *self.dim, len(self.dim)))
+        mr_targets = [None] * self.batch_size
+        us_targets = [None] * self.batch_size
 
         # Generate data
+        re_filter_mr = re.compile('^mr_target.*$')
+        re_filter_us = re.compile('^us_target.*$')
         for i, data_path in enumerate(patients_list):
-            mr_image_crop, mr_prostate_crop, us_image_crop, us_prostate_crop = SmartDataGenerator.single_load(data_path)
-            # images need to be of the size [batch_size, H, W, D]
+            mr_image_crop, mr_prostate_crop, us_image_crop, us_prostate_crop, targets = \
+                SmartDataGenerator.single_load(data_path)
+            # images need to be of the size [batch_size, H, W, D, 1]
             moving_images[i, ..., 0] = mr_image_crop
             fixed_images[i, ..., 0] = us_image_crop
             moving_images_seg[i, ..., 0] = mr_prostate_crop[::2, ::2, ::2]
             fixed_images_seg[i, ..., 0] = us_prostate_crop[::2, ::2, ::2]
-            # print(f"(loaded {data_path.name})")
+            # add targets
+            if output_targets:
+                target_names = targets.keys()
+                mr_target_names = sorted([s for s in target_names if re_filter_mr.match(s)])
+                tar = [targets[mr_target_name] for mr_target_name in mr_target_names]
+                if len(tar) > 0:
+                    mr_targets[i] = np.concatenate([t[..., np.newaxis] for t in tar], axis=3)
+                else:
+                    mr_targets[i] = None
+                us_target_names = sorted([s for s in target_names if re_filter_us.match(s)])
+                tar = [targets[us_target_name] for us_target_name in us_target_names]
+                if len(tar) > 0:
+                    us_targets[i] = np.concatenate([t[..., np.newaxis] for t in tar], axis=3)
+                else:
+                    us_targets[i] = None
 
         inputs = [moving_images, fixed_images, moving_images_seg]
 
@@ -221,18 +245,19 @@ class SmartDataGenerator(tf.keras.utils.Sequence):
         # we also wish to penalize the deformation field.
         outputs = [fixed_images, zero_phi, fixed_images_seg]
 
-        return inputs, outputs
+        return inputs, outputs, mr_targets, us_targets
 
     @staticmethod
-    def single_load(path):
-        data = np.load(path)
+    def single_load(path: str):
+        data = dict(np.load(path))
         mr_image, mr_prostate = data['mr_image'], data['mr_seg']
         us_image, us_prostate = data['us_image'], data['us_seg']
-        return mr_image, mr_prostate, us_image, us_prostate
+        del data['mr_image'], data['mr_seg'], data['us_image'], data['us_seg']
+        return mr_image, mr_prostate, us_image, us_prostate, data
 
     @staticmethod
     def single_input(path):
-        mr_image, mr_prostate, us_image, us_prostate = SmartDataGenerator.single_load(path)
+        mr_image, mr_prostate, us_image, us_prostate, _ = SmartDataGenerator.single_load(path)
         return [mr_image, us_image, mr_prostate]
 
 
@@ -300,3 +325,8 @@ class MIND_SSC:
 
     def mind_loss(self, x, y):
         return tf.reduce_mean((self.MINDSSC(x) - self.MINDSSC(y)) ** 2)
+
+
+def dice(image1, image2):
+    return 2 * np.bitwise_and(image1 != 0, image2 != 0).sum() / (image1.sum() + image2.sum())
+
