@@ -5,6 +5,9 @@ from pathlib import Path
 import SimpleITK as sitk
 import numpy as np
 import tensorflow as tf
+import voxelmorph as vxm
+# this version of voxelmorph is not up-to-dev branch
+tf.div_no_nan = tf.math.divide_no_nan
 
 
 class ImageLoader:
@@ -327,6 +330,69 @@ class MIND_SSC:
         return tf.reduce_mean((self.MINDSSC(x) - self.MINDSSC(y)) ** 2)
 
 
-def dice(image1, image2):
+def dice_coeff(image1, image2):
     return 2 * np.bitwise_and(image1 != 0, image2 != 0).sum() / (image1.sum() + image2.sum())
+
+
+def prepare_model(inshape, lambda_param=0.05, gamma_param=0.01):
+
+    tf.keras.backend.clear_session()
+
+    # same as default
+    # enc_nf = [16, 32, 32, 32]
+    # dec_nf = [32, 32, 32, 32, 32, 16, 16]
+
+    vxm_model = vxm.networks.VxmDenseSemiSupervisedSeg(
+        inshape=inshape, nb_labels=1,
+        # nb_unet_features=[enc_nf, dec_nf],
+        seg_downsize=2
+    )
+
+    # assigning loss
+    bin_centers = np.linspace(0, 1, 32)  # histogram bins, assume normalized images
+    loss_mi = vxm.losses.NMI(bin_centers=bin_centers, vol_size=inshape).loss
+    loss_dice = vxm.losses.Dice().loss
+    losses = [loss_mi, vxm.losses.Grad('l2').loss, loss_dice]
+    loss_weights = [1, lambda_param, gamma_param]
+
+    # assigning metrics
+    @tf.function
+    def mi(y_true, y_pred):
+        return -loss_mi(y_true, y_pred)
+    @tf.function
+    def dice(y_true, y_pred):
+        return -loss_dice(y_true, y_pred)
+    metrics = {'transformer': [mi],
+               'seg_transformer': [dice]}
+
+    vxm_model.compile(
+        optimizer=tf.keras.optimizers.Adam(learning_rate=1e-5),
+        loss=losses, loss_weights=loss_weights,
+        metrics=metrics
+    )
+    return vxm_model
+
+
+def split_dataset(dataset_folder, train_test_split=0.95, train_val_split=0.90, seed=None, reshuffle=True):
+    full_data = np.array(sorted(dataset_folder.iterdir()))
+    if seed is not None:
+        np.random.seed(seed)
+
+    # split train/test
+    np.random.shuffle(full_data)
+    idx = [int(train_test_split * full_data.shape[0])]
+    train_data, test_data = np.split(full_data, idx)
+
+    # split train/validation
+    if reshuffle:
+        np.random.shuffle(train_data)
+    idx = [int(train_val_split * train_data.shape[0])]
+    train_data, validation_data = np.split(train_data, idx)
+
+    # idx = (np.array([train_test_split * train_val_split, train_test_split]) * full_data.shape[0]).astype(int)
+    # train_data, validation_data, test_data = np.split(full_data, idx)
+
+    return train_data, validation_data, test_data
+
+
 
