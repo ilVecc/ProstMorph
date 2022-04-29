@@ -131,6 +131,5 @@ dmypy.json
 
 .idea/
 /OLD/
-/results/
 /models/
 /notebooks/evaluation/figures/
