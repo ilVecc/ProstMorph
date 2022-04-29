@@ -331,7 +331,7 @@ class MIND_SSC:
 
 
 def dice_coeff(image1, image2):
-    return 2 * np.bitwise_and(image1 != 0, image2 != 0).sum() / (image1.sum() + image2.sum())
+    return (2 * np.bitwise_and(image1 != 0, image2 != 0).sum() + 1) / (image1.sum() + image2.sum() + 1)
 
 
 def prepare_model(inshape, lambda_param=0.05, gamma_param=0.01):
