@@ -11,7 +11,7 @@ tf.div_no_nan = tf.math.divide_no_nan
 
 
 class ImageLoader:
-    
+
     @staticmethod
     def sitk_to_numpy(image, normalize=True):
         # might want to read  http://simpleitk.org/SimpleITK-Notebooks/01_Image_Basics.html
@@ -21,15 +21,15 @@ class ImageLoader:
         np_image = np.flip(np_image, axis=(0, 1, 2))
         np_image = np_image.astype(float) / np_image.max() if normalize else np_image  # default minimum is 0
         return np_image
-    
+
     @staticmethod
-    def rasify_image(image, is_segment=False):
+    def RASify_image(image, is_segment=False):
         doif = sitk.DICOMOrientImageFilter()
         doif.SetDesiredCoordinateOrientation('RAS')
         image = doif.Execute(image)
         image = sitk.RescaleIntensity(image, 0, 255) if not is_segment else image
         return image
-    
+
     @staticmethod
     def resample_image(image, new_size=None, new_spacing=None, is_segment=False):
         if new_size is None and new_spacing is None:
@@ -40,7 +40,7 @@ class ImageLoader:
         resample.SetInterpolator(sitk.sitkLinear if not is_segment else sitk.sitkNearestNeighbor)
         resample.SetOutputDirection(image.GetDirection())
         resample.SetOutputOrigin(image.GetOrigin())
-        
+
         orig_size = np.array(image.GetSize(), dtype=int)
         orig_spacing = np.array(image.GetSpacing())
         if new_size is not None:
@@ -49,10 +49,10 @@ class ImageLoader:
             new_size = (orig_size * orig_spacing / new_spacing).astype(int).tolist()
         resample.SetSize(new_size)
         resample.SetOutputSpacing(new_spacing)
-        
+
         new_image = resample.Execute(image)
         return new_image
-    
+
     @staticmethod
     def get_segment_bb(segment):
         lssif = sitk.LabelShapeStatisticsImageFilter()
@@ -60,75 +60,131 @@ class ImageLoader:
         bb = lssif.GetBoundingBox(1)  # prostate label has value 1
         origin, extent = bb[:3], bb[3:]
         return origin, extent
-    
+
     @staticmethod
     def load_image(image_filepath, segment_filepath, spacing, size):
-        
+
         output_image_type = np.float16
         output_segment_type = np.uint8
-        
+
         #
         # Initial loading
         #
-        
+
         # load images
         image = sitk.ReadImage(str(image_filepath), imageIO="NrrdImageIO")
         segment = sitk.ReadImage(str(segment_filepath), imageIO="NrrdImageIO")
-        
+
         # set RAS coordinates and rescale intensities
-        image = ImageLoader.rasify_image(image)
-        segment = ImageLoader.rasify_image(segment, is_segment=True)
-        
+        image = ImageLoader.RASify_image(image)
+        segment = ImageLoader.RASify_image(segment, is_segment=True)
+
         # resample images
         # https://simpleitk.readthedocs.io/en/v1.2.4/Documentation/docs/source/fundamentalConcepts.html
         image_resampled = ImageLoader.resample_image(image, new_spacing=spacing)
         segment_resampled = ImageLoader.resample_image(segment, new_spacing=spacing, is_segment=True)
-        
+
         # numpy resampled images
         np_image_resampled = ImageLoader.sitk_to_numpy(image_resampled).astype(output_image_type)
         np_segment_resampled = ImageLoader.sitk_to_numpy(segment_resampled, normalize=False).astype(output_segment_type)
-        
+
         #
         # Final cropping
         #
-        
+
         # crop the volume
         seg_origin_resampled, seg_extent_resampled = ImageLoader.get_segment_bb(segment_resampled)
         seg_center_resampled = np.array(seg_origin_resampled) + np.array(seg_extent_resampled) // 2
         crop_size = np.array(size)
-        
+
         # since in the  sitk_to_numpy()  we don't use the transpose, the  crop_*  variables must refer to the (z,y,x) coordinates; thus, use [::-1]
         # also, we must account for the  .flip() , so we also reverse the coordinates
         seg_center_resampled = np.array(np_segment_resampled.shape) - seg_center_resampled[::-1]
         crop_origin = seg_center_resampled - crop_size[::-1] // 2
         crop_ending = seg_center_resampled + crop_size[::-1] // 2
-        
+
         safe_crop_origin = np.clip(crop_origin, [0, 0, 0], np_image_resampled.shape)
         safe_crop_ending = np.clip(crop_ending, [0, 0, 0], np_image_resampled.shape)
         np_image_cropped = np_image_resampled[safe_crop_origin[0]:safe_crop_ending[0], safe_crop_origin[1]:safe_crop_ending[1], safe_crop_origin[2]:safe_crop_ending[2]]
         np_segment_cropped = np_segment_resampled[safe_crop_origin[0]:safe_crop_ending[0], safe_crop_origin[1]:safe_crop_ending[1], safe_crop_origin[2]:safe_crop_ending[2]]
-        
+
         # since the crop_size could be bigger than the actual prostate size, we could need to add black slices to the image
         final_origin = - (crop_origin - safe_crop_origin) * ((crop_origin - safe_crop_origin) != 0)
         final_ending = crop_size - (crop_ending - safe_crop_ending) * ((crop_ending - safe_crop_ending) != 0)
-        
+
         np_image_final = np.zeros(shape=crop_size, dtype=output_image_type)
         np_segment_final = np.zeros(shape=crop_size, dtype=output_segment_type)
         np_image_final[final_origin[0]:final_ending[0], final_origin[1]:final_ending[1], final_origin[2]:final_ending[2]] = np_image_cropped
         np_segment_final[final_origin[0]:final_ending[0], final_origin[1]:final_ending[1], final_origin[2]:final_ending[2]] = np_segment_cropped
-        
+
         return np_image_final, np_segment_final, image, segment
+
+    @staticmethod
+    def load_target(image_filepath, segment_filepath, spacing, size):
+
+        output_target_type = np.uint8
+        output_segment_type = np.uint8
+
+        #
+        # Initial loading
+        #
+
+        # load images
+        target = sitk.ReadImage(str(image_filepath), imageIO="NrrdImageIO")
+        segment = sitk.ReadImage(str(segment_filepath), imageIO="NrrdImageIO")
+
+        # set RAS coordinates and rescale intensities
+        target = ImageLoader.RASify_image(target, is_segment=True)
+        segment = ImageLoader.RASify_image(segment, is_segment=True)
+
+        # resample images
+        # https://simpleitk.readthedocs.io/en/v1.2.4/Documentation/docs/source/fundamentalConcepts.html
+        target_resampled = ImageLoader.resample_image(target, new_spacing=spacing, is_segment=True)
+        segment_resampled = ImageLoader.resample_image(segment, new_spacing=spacing, is_segment=True)
+
+        # numpy resampled images
+        np_target_resampled = ImageLoader.sitk_to_numpy(target_resampled, normalize=False).astype(output_target_type)
+        np_segment_resampled = ImageLoader.sitk_to_numpy(segment_resampled, normalize=False).astype(output_segment_type)
+
+        #
+        # Final cropping
+        #
+
+        # crop the volume
+        seg_origin_resampled, seg_extent_resampled = ImageLoader.get_segment_bb(segment_resampled)
+        seg_center_resampled = np.array(seg_origin_resampled) + np.array(seg_extent_resampled) // 2
+        crop_size = np.array(size)
+
+        # since in the  sitk_to_numpy()  we don't use the transpose, the  crop_*  variables must refer to the (z,y,x) coordinates; thus, use [::-1]
+        # also, we must account for the  .flip() , so we also reverse the coordinates
+        seg_center_resampled = np.array(np_segment_resampled.shape) - seg_center_resampled[::-1]
+        crop_origin = seg_center_resampled - crop_size[::-1] // 2
+        crop_ending = seg_center_resampled + crop_size[::-1] // 2
+
+        safe_crop_origin = np.clip(crop_origin, [0, 0, 0], np_target_resampled.shape)
+        safe_crop_ending = np.clip(crop_ending, [0, 0, 0], np_target_resampled.shape)
+        np_target_cropped = np_target_resampled[safe_crop_origin[0]:safe_crop_ending[0], safe_crop_origin[1]:safe_crop_ending[1],safe_crop_origin[2]:safe_crop_ending[2]]
+        np_segment_cropped = np_segment_resampled[safe_crop_origin[0]:safe_crop_ending[0], safe_crop_origin[1]:safe_crop_ending[1],safe_crop_origin[2]:safe_crop_ending[2]]
+
+        # since the crop_size could be bigger than the actual prostate size, we could need to add black slices to the image
+        final_origin = - (crop_origin - safe_crop_origin) * ((crop_origin - safe_crop_origin) != 0)
+        final_ending = crop_size - (crop_ending - safe_crop_ending) * ((crop_ending - safe_crop_ending) != 0)
+
+        np_target_final = np.zeros(shape=crop_size, dtype=output_target_type)
+        np_target_final[final_origin[0]:final_ending[0], final_origin[1]:final_ending[1], final_origin[2]:final_ending[2]] = np_target_cropped
+
+        return np_target_final, target
 
 
 class DatasetCreator:
-    
+
     def __init__(self, dataset_path: Path, dim: tuple, resampling_spacing: tuple):
         self.folder_base = dataset_path
         self.folder_mr = self.folder_base / "mri"
         self.folder_us = self.folder_base / "us"
         self.resampling_spacing = resampling_spacing
         self.dim = dim
-        
+
         patients_us_list = [f.name for f in self.folder_us.iterdir()]
         patients_list = [f.name for f in self.folder_mr.iterdir() if f.name in patients_us_list]
         self.patients_options = [
@@ -136,7 +192,7 @@ class DatasetCreator:
             for p in patients_list
             for mr, us in list(itertools.product([f.name for f in (self.folder_mr / p).iterdir()], [f.name for f in (self.folder_us / p).iterdir()]))
         ]
-    
+
     def run(self, output_folder: Path):
         output_folder.mkdir(exist_ok=True)
         for i, (patient, mr_data, us_data) in enumerate(self.patients_options):
@@ -147,9 +203,15 @@ class DatasetCreator:
             mr_image_cropped, mr_prostate_cropped, _, _ = ImageLoader.load_image(mr_image_filename, mr_prostate_filename, self.resampling_spacing, self.dim)
             us_image_cropped, us_prostate_cropped, _, _ = ImageLoader.load_image(us_image_filename, us_prostate_filename, self.resampling_spacing, self.dim)
             # save to file
+            data = {
+                "mr_image": mr_image_cropped,
+                "mr_seg": mr_prostate_cropped,
+                "us_image": us_image_cropped,
+                "us_seg": us_prostate_cropped
+            }
             outfile = str(output_folder / f"{patient}_{mr_data}_{us_data}.npz")
-            np.savez_compressed(outfile, mr_image=mr_image_cropped, mr_seg=mr_prostate_cropped, us_image=us_image_cropped, us_seg=us_prostate_cropped)
-    
+            np.savez_compressed(outfile, **data)
+
     @staticmethod
     def check(output_folder: Path):
         for data_path in output_folder.iterdir():
@@ -158,6 +220,49 @@ class DatasetCreator:
                 _, _, _, _ = data['mr_image'], data['mr_seg'], data['us_image'], data['us_seg']
             except Exception as ex:
                 print(f"File {data_path.name} not well compressed!")
+
+    def add_target(self, path, patient, mr_data, us_data):
+            mr_targets = sorted((self.folder_mr / patient / mr_data).rglob("Target*"))
+            us_targets = sorted((self.folder_us / patient / us_data).rglob("Target*"))
+            mr_prostate_filename = list((self.folder_mr / patient / mr_data).rglob("Prostate*"))[0]
+            us_prostate_filename = list((self.folder_us / patient / us_data).rglob("Prostate*"))[0]
+            npz = dict(np.load(path))
+            for mr_target in mr_targets:
+                mr_name = mr_target.name.split("_")[0].lower()
+                mr_target_cropped, _ = ImageLoader.load_target(mr_target, mr_prostate_filename, self.resampling_spacing, self.dim)
+                npz[f"mr_{mr_name}"] = mr_target_cropped
+            for us_target in us_targets:
+                us_name = us_target.name.split("_")[0].lower()
+                us_target_cropped, _ = ImageLoader.load_target(us_target, us_prostate_filename, self.resampling_spacing, self.dim)
+                npz[f"us_{us_name}"] = us_target_cropped
+            np.savez_compressed(path, **npz)
+
+    def add_targets(self, output_path):
+        for f in output_path.iterdir():
+            fn = f.stem.split("_")
+            patient, mr_data, us_data = fn[0], fn[1], fn[2]
+            self.add_target(f, patient, mr_data, us_data)
+            print(f"done {patient}")
+
+    def check_targets(self, output_path):
+        from tqdm import tqdm
+        for f in tqdm(list(output_path.iterdir())):
+            npz = dict(np.load(f))
+
+            re_filter_mr = re.compile('^mr_target.*$')
+            re_filter_us = re.compile('^us_target.*$')
+
+            tags = npz.keys()
+
+            mr_tags = [s for s in tags if re.match(re_filter_mr, s)]
+            us_tags = [s for s in tags if re.match(re_filter_us, s)]
+
+            if len(mr_tags) == 0 or len(us_tags) == 0:
+                print(f"---> BAD {f.stem}, saving it again")
+                fn = f.stem.split("_")
+                patient, mr_data, us_data = fn[0], fn[1], fn[2]
+                self.add_target(f, patient, mr_data, us_data)
+                print(f"done {patient}")
 
 
 class SmartDataGenerator(tf.keras.utils.Sequence):
@@ -331,10 +436,11 @@ class MIND_SSC:
 
 
 def dice_coeff(image1, image2):
+    # return (2 * ((image1 * image2) > 0.5).sum() + 1) / (image1.sum() + image2.sum() + 1)
     return (2 * np.bitwise_and(image1 != 0, image2 != 0).sum() + 1) / (image1.sum() + image2.sum() + 1)
 
 
-def prepare_model(inshape, lambda_param=0.05, gamma_param=0.01):
+def prepare_model(inshape, sim_param=1.0, lambda_param=0.05, gamma_param=0.01):
 
     tf.keras.backend.clear_session()
 
@@ -353,7 +459,7 @@ def prepare_model(inshape, lambda_param=0.05, gamma_param=0.01):
     loss_mi = vxm.losses.NMI(bin_centers=bin_centers, vol_size=inshape).loss
     loss_dice = vxm.losses.Dice().loss
     losses = [loss_mi, vxm.losses.Grad('l2').loss, loss_dice]
-    loss_weights = [1, lambda_param, gamma_param]
+    loss_weights = [sim_param, lambda_param, gamma_param]
 
     # assigning metrics
     @tf.function
@@ -394,5 +500,192 @@ def split_dataset(dataset_folder, train_test_split=0.95, train_val_split=0.90, s
 
     return train_data, validation_data, test_data
 
+#
+# EVALUATION
+#
 
 
+def get_index(string, shift=1):
+    if string.startswith('0.0'):
+        return 0 - shift
+    if string == '0.5':
+        return 1 - shift
+    if string == '1.0':
+        return 2 - shift
+    if string == '2.0':
+        return 3 - shift
+    if string == '3.0':
+        return 4 - shift
+    if string == '4.0':
+        return 5 - shift
+    if string == '5.0':
+        return 6 - shift
+    return None
+
+
+def init_stats(n, m):
+    grid_shape = (n, m)
+    stats = {
+        "prostate": {
+            "final": {
+                "dice": {
+                "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                "std": np.full(shape=grid_shape, fill_value=np.nan)
+            }
+            },
+            "pre": {
+                "dice": {
+                "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                "std": np.full(shape=grid_shape, fill_value=np.nan)
+            }
+            },
+            "def": {
+                "dice": {
+                "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                "std": np.full(shape=grid_shape, fill_value=np.nan)
+            }
+            },
+        },
+        "target": {
+            "final": {
+                "valid": {
+                    "ratio": np.full(shape=grid_shape, fill_value=np.nan),
+                    "dice": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    },
+                    "error": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    }
+                },
+                "good": {
+                    "ratio": np.full(shape=grid_shape, fill_value=np.nan),
+                    "dice": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    },
+                    "error": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    }
+                },
+                "decent": {
+                    "ratio": np.full(shape=grid_shape, fill_value=np.nan),
+                    "dice": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    },
+                    "error": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    }
+                },
+                "bad": {
+                    "ratio": np.full(shape=grid_shape, fill_value=np.nan),
+                    "dice": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    },
+                    "error": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    }
+                },
+            },
+            "pre": {
+                "dice": {
+                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                    "std": np.full(shape=grid_shape, fill_value=np.nan)
+                },
+                "error": {
+                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                    "std": np.full(shape=grid_shape, fill_value=np.nan)
+                }
+            },
+            "def": {
+                "dice": {
+                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                    "std": np.full(shape=grid_shape, fill_value=np.nan)
+                },
+                "error": {
+                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                    "std": np.full(shape=grid_shape, fill_value=np.nan)
+                }
+            }
+        }
+    }
+    return stats
+
+
+def store_stats(stats, results, l, g, good_dice_threshold=0.25):
+    # PROSTATE: PRE AND DEF (only Dice)
+    stats["prostate"]["def"]["dice"]["mean"][l, g] = results['prostate_dice_def'].mean()
+    stats["prostate"]["def"]["dice"]["std"][l, g] = results['prostate_dice_def'].std()
+    stats["prostate"]["pre"]["dice"]["mean"][l, g] = results['prostate_dice_pre'].mean()
+    stats["prostate"]["pre"]["dice"]["std"][l, g] = results['prostate_dice_pre'].std()
+    # PROSTATE: FINAL (only Dice)
+    stats["prostate"]["final"]["dice"]["mean"][l, g] = results['prostate_dice'].mean()
+    stats["prostate"]["final"]["dice"]["std"][l, g] = results['prostate_dice'].std()
+
+    # TARGET: PRE AND DEF
+    stats["target"]["def"]["dice"]["mean"][l, g] = results['target_dice_def'].mean()
+    stats["target"]["def"]["dice"]["std"][l, g] = results['target_dice_def'].std()
+    stats["target"]["def"]["error"]["mean"][l, g] = results['target_error_def'].mean()
+    stats["target"]["def"]["error"]["std"][l, g] = results['target_error_def'].std()
+    stats["target"]["pre"]["dice"]["mean"][l, g] = results['target_dice_pre'].mean()
+    stats["target"]["pre"]["dice"]["std"][l, g] = results['target_dice_pre'].std()
+    stats["target"]["pre"]["error"]["mean"][l, g] = results['target_error_pre'].mean()
+    stats["target"]["pre"]["error"]["std"][l, g] = results['target_error_pre'].std()
+    # TARGET: FINAL (valid)
+    valid_dice_vals = results['target_dice'][np.isfinite(results['target_dice'])]
+    valid_error_vals = results['target_error'][np.isfinite(results['target_error'])]
+    stats["target"]["final"]["valid"]["ratio"][l, g] = len(valid_dice_vals) / len(results['target_dice'])
+    stats["target"]["final"]["valid"]["dice"]["mean"][l, g] = valid_dice_vals.mean()
+    stats["target"]["final"]["valid"]["dice"]["std"][l, g] = valid_dice_vals.std()
+    stats["target"]["final"]["valid"]["error"]["mean"][l, g] = valid_error_vals.mean()
+    stats["target"]["final"]["valid"]["error"]["std"][l, g] = valid_error_vals.std()
+    # TARGET: FINAL (good)
+    good_dice_vals = results['target_dice'][results['target_dice'] > good_dice_threshold]
+    good_error_vals = results['target_error'][results['target_dice'] > good_dice_threshold]
+    stats["target"]["final"]["good"]["ratio"][l, g] = len(good_dice_vals) / len(results['target_dice'])
+    stats["target"]["final"]["good"]["dice"]["mean"][l, g] = good_dice_vals.mean()
+    stats["target"]["final"]["good"]["dice"]["std"][l, g] = good_dice_vals.std()
+    stats["target"]["final"]["good"]["error"]["mean"][l, g] = good_error_vals.mean()
+    stats["target"]["final"]["good"]["error"]["std"][l, g] = good_error_vals.std()
+    # TARGET: FINAL (decent)
+    decent_dice_vals = results['target_dice'][results['target_dice'] > 0]
+    decent_error_vals = results['target_error'][results['target_dice'] > 0]
+    stats["target"]["final"]["decent"]["ratio"][l, g] = len(decent_dice_vals) / len(results['target_dice'])
+    stats["target"]["final"]["decent"]["dice"]["mean"][l, g] = decent_dice_vals.mean()
+    stats["target"]["final"]["decent"]["dice"]["std"][l, g] = decent_dice_vals.std()
+    stats["target"]["final"]["decent"]["error"]["mean"][l, g] = decent_error_vals.mean()
+    stats["target"]["final"]["decent"]["error"]["std"][l, g] = decent_error_vals.std()
+    # TARGET: FINAL (bad)
+    bad_dice_vals = results['target_dice'][results['target_dice'] == 0]
+    bad_error_vals = results['target_error'][results['target_dice'] == 0]
+    stats["target"]["final"]["bad"]["ratio"][l, g] = len(bad_dice_vals) / len(results['target_dice'])
+    stats["target"]["final"]["bad"]["dice"]["mean"][l, g] = bad_dice_vals.mean()
+    stats["target"]["final"]["bad"]["dice"]["std"][l, g] = bad_dice_vals.std()
+    stats["target"]["final"]["bad"]["error"]["mean"][l, g] = bad_error_vals.mean()
+    stats["target"]["final"]["bad"]["error"]["std"][l, g] = bad_error_vals.std()
+
+    return stats
+
+
+def print_stats(stats, l, g):
+    print(f"prostate Dice PRE:   {stats['prostate']['pre']['dice']['mean'][l, g] * 100:.2f}±{stats['prostate']['pre']['dice']['std'][l, g] * 100:.2f}%")
+    print(f"prostate Dice INTRA: {stats['prostate']['def']['dice']['mean'][l, g] * 100:.2f}±{stats['prostate']['def']['dice']['std'][l, g] * 100:.2f}%")
+    print(f"prostate Dice POST:  {stats['prostate']['final']['dice']['mean'][l, g] * 100:.2f}±{stats['prostate']['final']['dice']['std'][l, g] * 100:.2f}%")
+    print()
+    print()
+    print(f"target Dice PRE:   {stats['target']['pre']['dice']['mean'][l, g] * 100:.2f}±{stats['target']['pre']['dice']['std'][l, g] * 100:.2f}%")
+    print(f"TRE PRE:           {stats['target']['pre']['error']['mean'][l, g]:.2f}±{stats['target']['pre']['error']['std'][l, g]:.2f}mm")
+    print(f"target Dice INTRA: {stats['target']['def']['dice']['mean'][l, g] * 100:.2f}±{stats['target']['def']['dice']['std'][l, g] * 100:.2f}%")
+    print(f"TRE INTRA:         {stats['target']['def']['error']['mean'][l, g]:.2f}±{stats['target']['def']['error']['std'][l, g]:.2f}mm")
+    print()
+    for metric in ["valid", "good", "decent", "bad"]:
+        print(f"# {metric} target Dice: {stats['target']['final'][metric]['ratio'][l, g] * 100:.2f}%")
+        print(f"{metric} Dice:          {stats['target']['final'][metric]['dice']['mean'][l, g] * 100:.2f}±{stats['target']['final'][metric]['dice']['std'][l, g] * 100:.2f}%")
+        print(f"{metric} TRE:           {stats['target']['final'][metric]['error']['mean'][l, g]:.2f}±{stats['target']['final'][metric]['error']['std'][l, g]:.2f}mm")
+        print()
