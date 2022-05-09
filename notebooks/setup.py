@@ -24,15 +24,15 @@ test_generator = SmartDataGenerator(test_data, dim=size, batch_size=1, seed=SEED
 #####
 config = {
     'sim_param': 1.0,
-    'lambda_param': 2.0,
-    'gamma_param': 3.0,
-    "is_final": False,
-    "initial_epoch": 0,
-    "epochs": 100,
+    'lambda_param': 4.0,
+    'gamma_param': 2.0,
+    "is_final": True,
+    "initial_epoch": 150,
+    "epochs": 300,
     "steps_per_epoch": 100
 }
-config["name"] = f"{config['lambda_param']}_{config['gamma_param']}"
-config["base_dir"] = Path(f"../models/test_{config['name']}{'_final' if config['is_final'] else ''}")
+config["name"] = f"{config['lambda_param']}_{config['gamma_param']}{'_final' if config['is_final'] else ''}"
+config["base_dir"] = Path(f"../models/test_{config['name']}")
 config["log_dir"] = str(config["base_dir"] / "logs")
 config["history_filepath"] = str(config["base_dir"] / "history.csv")
 config["checkpoints_dir"] = config["base_dir"] / "checkpoints"

@@ -35,3 +35,7 @@ def get_model_memory_usage(batch_size, model):
     total_memory = number_size * (batch_size * shapes_mem_count + trainable_count + non_trainable_count)
     gbytes = np.round(total_memory / (1024.0 ** 3), 3) + internal_model_mem_count
     return gbytes
+
+from setup import model
+
+print(get_model_memory_usage(1, model))

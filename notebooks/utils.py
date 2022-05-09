@@ -504,21 +504,21 @@ def split_dataset(dataset_folder, train_test_split=0.95, train_val_split=0.90, s
 #
 
 
-def get_index(string, shift=1):
+def get_index(string, shift=0):
     if string.startswith('0.0'):
-        return 0 - shift
+        return 0
     if string == '0.5':
-        return 1 - shift
+        return 1
     if string == '1.0':
-        return 2 - shift
+        return 2
     if string == '2.0':
-        return 3 - shift
+        return 3
     if string == '3.0':
-        return 4 - shift
+        return 4
     if string == '4.0':
-        return 5 - shift
+        return 5
     if string == '5.0':
-        return 6 - shift
+        return 6
     return None
 
 
@@ -526,26 +526,78 @@ def init_stats(n, m):
     grid_shape = (n, m)
     stats = {
         "prostate": {
-            "final": {
-                "dice": {
-                "mean": np.full(shape=grid_shape, fill_value=np.nan),
-                "std": np.full(shape=grid_shape, fill_value=np.nan)
-            }
-            },
             "pre": {
                 "dice": {
-                "mean": np.full(shape=grid_shape, fill_value=np.nan),
-                "std": np.full(shape=grid_shape, fill_value=np.nan)
-            }
+                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                    "std": np.full(shape=grid_shape, fill_value=np.nan)
+                }
             },
             "def": {
                 "dice": {
-                "mean": np.full(shape=grid_shape, fill_value=np.nan),
-                "std": np.full(shape=grid_shape, fill_value=np.nan)
-            }
+                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                    "std": np.full(shape=grid_shape, fill_value=np.nan)
+                }
+            },
+            "final": {
+                "dice": {
+                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                    "std": np.full(shape=grid_shape, fill_value=np.nan)
+                }
             },
         },
         "target": {
+            "pre": {
+                "dice": {
+                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                    "std": np.full(shape=grid_shape, fill_value=np.nan)
+                },
+                "error": {
+                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                    "std": np.full(shape=grid_shape, fill_value=np.nan)
+                }
+            },
+            "def": {
+                "valid": {
+                    "dice": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    },
+                    "error": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    }
+                },
+                "good": {
+                    "dice": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    },
+                    "error": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    }
+                },
+                "decent": {
+                    "dice": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    },
+                    "error": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    }
+                },
+                "bad": {
+                    "dice": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    },
+                    "error": {
+                        "mean": np.full(shape=grid_shape, fill_value=np.nan),
+                        "std": np.full(shape=grid_shape, fill_value=np.nan)
+                    }
+                }
+            },
             "final": {
                 "valid": {
                     "ratio": np.full(shape=grid_shape, fill_value=np.nan),
@@ -590,26 +642,6 @@ def init_stats(n, m):
                         "mean": np.full(shape=grid_shape, fill_value=np.nan),
                         "std": np.full(shape=grid_shape, fill_value=np.nan)
                     }
-                },
-            },
-            "pre": {
-                "dice": {
-                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
-                    "std": np.full(shape=grid_shape, fill_value=np.nan)
-                },
-                "error": {
-                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
-                    "std": np.full(shape=grid_shape, fill_value=np.nan)
-                }
-            },
-            "def": {
-                "dice": {
-                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
-                    "std": np.full(shape=grid_shape, fill_value=np.nan)
-                },
-                "error": {
-                    "mean": np.full(shape=grid_shape, fill_value=np.nan),
-                    "std": np.full(shape=grid_shape, fill_value=np.nan)
                 }
             }
         }
@@ -619,19 +651,15 @@ def init_stats(n, m):
 
 def store_stats(stats, results, l, g, good_dice_threshold=0.25):
     # PROSTATE: PRE AND DEF (only Dice)
-    stats["prostate"]["def"]["dice"]["mean"][l, g] = results['prostate_dice_def'].mean()
-    stats["prostate"]["def"]["dice"]["std"][l, g] = results['prostate_dice_def'].std()
     stats["prostate"]["pre"]["dice"]["mean"][l, g] = results['prostate_dice_pre'].mean()
     stats["prostate"]["pre"]["dice"]["std"][l, g] = results['prostate_dice_pre'].std()
+    stats["prostate"]["def"]["dice"]["mean"][l, g] = results['prostate_dice_def'].mean()
+    stats["prostate"]["def"]["dice"]["std"][l, g] = results['prostate_dice_def'].std()
     # PROSTATE: FINAL (only Dice)
     stats["prostate"]["final"]["dice"]["mean"][l, g] = results['prostate_dice'].mean()
     stats["prostate"]["final"]["dice"]["std"][l, g] = results['prostate_dice'].std()
 
     # TARGET: PRE AND DEF
-    stats["target"]["def"]["dice"]["mean"][l, g] = results['target_dice_def'].mean()
-    stats["target"]["def"]["dice"]["std"][l, g] = results['target_dice_def'].std()
-    stats["target"]["def"]["error"]["mean"][l, g] = results['target_error_def'].mean()
-    stats["target"]["def"]["error"]["std"][l, g] = results['target_error_def'].std()
     stats["target"]["pre"]["dice"]["mean"][l, g] = results['target_dice_pre'].mean()
     stats["target"]["pre"]["dice"]["std"][l, g] = results['target_dice_pre'].std()
     stats["target"]["pre"]["error"]["mean"][l, g] = results['target_error_pre'].mean()
@@ -644,6 +672,12 @@ def store_stats(stats, results, l, g, good_dice_threshold=0.25):
     stats["target"]["final"]["valid"]["dice"]["std"][l, g] = valid_dice_vals.std()
     stats["target"]["final"]["valid"]["error"]["mean"][l, g] = valid_error_vals.mean()
     stats["target"]["final"]["valid"]["error"]["std"][l, g] = valid_error_vals.std()
+    valid_dice_vals = results['target_dice_def'][np.isfinite(results['target_dice'])]
+    valid_error_vals = results['target_error_def'][np.isfinite(results['target_error'])]
+    stats["target"]["def"]["valid"]["dice"]["mean"][l, g] = valid_dice_vals.mean()
+    stats["target"]["def"]["valid"]["dice"]["std"][l, g] = valid_dice_vals.std()
+    stats["target"]["def"]["valid"]["error"]["mean"][l, g] = valid_error_vals.mean()
+    stats["target"]["def"]["valid"]["error"]["std"][l, g] = valid_error_vals.std()
     # TARGET: FINAL (good)
     good_dice_vals = results['target_dice'][results['target_dice'] > good_dice_threshold]
     good_error_vals = results['target_error'][results['target_dice'] > good_dice_threshold]
@@ -652,6 +686,12 @@ def store_stats(stats, results, l, g, good_dice_threshold=0.25):
     stats["target"]["final"]["good"]["dice"]["std"][l, g] = good_dice_vals.std()
     stats["target"]["final"]["good"]["error"]["mean"][l, g] = good_error_vals.mean()
     stats["target"]["final"]["good"]["error"]["std"][l, g] = good_error_vals.std()
+    good_dice_vals = results['target_dice_def'][results['target_dice'] > good_dice_threshold]
+    good_error_vals = results['target_error_def'][results['target_dice'] > good_dice_threshold]
+    stats["target"]["def"]["good"]["dice"]["mean"][l, g] = good_dice_vals.mean()
+    stats["target"]["def"]["good"]["dice"]["std"][l, g] = good_dice_vals.std()
+    stats["target"]["def"]["good"]["error"]["mean"][l, g] = good_error_vals.mean()
+    stats["target"]["def"]["good"]["error"]["std"][l, g] = good_error_vals.std()
     # TARGET: FINAL (decent)
     decent_dice_vals = results['target_dice'][results['target_dice'] > 0]
     decent_error_vals = results['target_error'][results['target_dice'] > 0]
@@ -660,6 +700,12 @@ def store_stats(stats, results, l, g, good_dice_threshold=0.25):
     stats["target"]["final"]["decent"]["dice"]["std"][l, g] = decent_dice_vals.std()
     stats["target"]["final"]["decent"]["error"]["mean"][l, g] = decent_error_vals.mean()
     stats["target"]["final"]["decent"]["error"]["std"][l, g] = decent_error_vals.std()
+    decent_dice_vals = results['target_dice_def'][results['target_dice'] > 0]
+    decent_error_vals = results['target_error_def'][results['target_dice'] > 0]
+    stats["target"]["def"]["decent"]["dice"]["mean"][l, g] = decent_dice_vals.mean()
+    stats["target"]["def"]["decent"]["dice"]["std"][l, g] = decent_dice_vals.std()
+    stats["target"]["def"]["decent"]["error"]["mean"][l, g] = decent_error_vals.mean()
+    stats["target"]["def"]["decent"]["error"]["std"][l, g] = decent_error_vals.std()
     # TARGET: FINAL (bad)
     bad_dice_vals = results['target_dice'][results['target_dice'] == 0]
     bad_error_vals = results['target_error'][results['target_dice'] == 0]
@@ -668,6 +714,12 @@ def store_stats(stats, results, l, g, good_dice_threshold=0.25):
     stats["target"]["final"]["bad"]["dice"]["std"][l, g] = bad_dice_vals.std()
     stats["target"]["final"]["bad"]["error"]["mean"][l, g] = bad_error_vals.mean()
     stats["target"]["final"]["bad"]["error"]["std"][l, g] = bad_error_vals.std()
+    bad_dice_vals = results['target_dice_def'][results['target_dice'] == 0]
+    bad_error_vals = results['target_error_def'][results['target_dice'] == 0]
+    stats["target"]["def"]["bad"]["dice"]["mean"][l, g] = bad_dice_vals.mean()
+    stats["target"]["def"]["bad"]["dice"]["std"][l, g] = bad_dice_vals.std()
+    stats["target"]["def"]["bad"]["error"]["mean"][l, g] = bad_error_vals.mean()
+    stats["target"]["def"]["bad"]["error"]["std"][l, g] = bad_error_vals.std()
 
     return stats
 
@@ -680,11 +732,11 @@ def print_stats(stats, l, g):
     print()
     print(f"target Dice PRE:   {stats['target']['pre']['dice']['mean'][l, g] * 100:.2f}±{stats['target']['pre']['dice']['std'][l, g] * 100:.2f}%")
     print(f"TRE PRE:           {stats['target']['pre']['error']['mean'][l, g]:.2f}±{stats['target']['pre']['error']['std'][l, g]:.2f}mm")
-    print(f"target Dice INTRA: {stats['target']['def']['dice']['mean'][l, g] * 100:.2f}±{stats['target']['def']['dice']['std'][l, g] * 100:.2f}%")
-    print(f"TRE INTRA:         {stats['target']['def']['error']['mean'][l, g]:.2f}±{stats['target']['def']['error']['std'][l, g]:.2f}mm")
     print()
     for metric in ["valid", "good", "decent", "bad"]:
         print(f"# {metric} target Dice: {stats['target']['final'][metric]['ratio'][l, g] * 100:.2f}%")
+        print(f"target Dice INTRA:      {stats['target']['def'][metric]['dice']['mean'][l, g] * 100:.2f}±{stats['target']['def'][metric]['dice']['std'][l, g] * 100:.2f}%")
+        print(f"TRE INTRA:              {stats['target']['def'][metric]['error']['mean'][l, g]:.2f}±{stats['target']['def'][metric]['error']['std'][l, g]:.2f}mm")
         print(f"{metric} Dice:          {stats['target']['final'][metric]['dice']['mean'][l, g] * 100:.2f}±{stats['target']['final'][metric]['dice']['std'][l, g] * 100:.2f}%")
         print(f"{metric} TRE:           {stats['target']['final'][metric]['error']['mean'][l, g]:.2f}±{stats['target']['final'][metric]['error']['std'][l, g]:.2f}mm")
         print()
