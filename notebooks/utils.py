@@ -11,16 +11,95 @@ tf.div_no_nan = tf.math.divide_no_nan
 
 
 class ImageLoader:
+    
+    output_image_type = np.float16
+    output_segment_type = np.uint8
+    lssif = sitk.LabelShapeStatisticsImageFilter()
 
     @staticmethod
-    def sitk_to_numpy(image, normalize=True):
-        # might want to read  http://simpleitk.org/SimpleITK-Notebooks/01_Image_Basics.html
-        # this changes (x,y,z) to (z,y,x), which requires a  .transpose() , but since we applied a previous
-        # change to RAS we don't need it here and we simply change the orientation flipping the axes
-        np_image = sitk.GetArrayFromImage(image)
-        np_image = np.flip(np_image, axis=(0, 1, 2))
-        np_image = np_image.astype(float) / np_image.max() if normalize else np_image  # default minimum is 0
-        return np_image
+    def load_sample_nrrd(image_filepath, segment_filepath, spacing, size):
+    
+        #
+        # Initial loading
+        #
+    
+        # load images
+        image = sitk.ReadImage(str(image_filepath), imageIO="NrrdImageIO")
+        segment = sitk.ReadImage(str(segment_filepath), imageIO="NrrdImageIO")
+    
+        return ImageLoader.prepare_sample(image, segment, spacing, size)[:2]
+
+    @staticmethod
+    def prepare_sample(image, segment, spacing, size):
+        image = ImageLoader.rasify_and_resample(image, spacing)
+        segment = ImageLoader.rasify_and_resample(segment, spacing, is_segment=True)
+
+        crop_size = np.array(size)
+        safe_crop_range, final_crop_range = ImageLoader.get_cropping_ranges(segment, crop_size)
+    
+        np_image_final = ImageLoader.safe_crop(image, crop_size, safe_crop_range, final_crop_range)
+        np_segment_final = ImageLoader.safe_crop(segment, crop_size, safe_crop_range, final_crop_range, is_segment=True)
+    
+        return np_image_final, np_segment_final, safe_crop_range, final_crop_range
+
+    @staticmethod
+    def rasify_and_resample(image, spacing, is_segment=False):
+        # set RAS coordinates and rescale intensities
+        image_ras = ImageLoader.RASify_image(image, is_segment)
+    
+        # resample images
+        # https://simpleitk.readthedocs.io/en/v1.2.4/Documentation/docs/source/fundamentalConcepts.html
+        image_resampled = ImageLoader.resample_image(image_ras, new_spacing=spacing, is_segment=is_segment)
+    
+        return image_resampled
+
+    @staticmethod
+    def get_cropping_ranges(segment, crop_size):
+    
+        segment_size = np.array(segment.GetSize())
+    
+        # crop the volume
+        seg_origin_resampled, seg_extent_resampled = ImageLoader.get_segment_bb(segment)
+        seg_center_resampled = np.array(seg_origin_resampled) + np.array(seg_extent_resampled) // 2
+    
+        seg_center_resampled = segment_size - seg_center_resampled
+        crop_origin = seg_center_resampled - crop_size // 2
+        crop_ending = seg_center_resampled + crop_size // 2
+    
+        # avoid going outside the image dimensions
+        safe_crop_origin = np.clip(crop_origin, [0, 0, 0], segment_size)  # np_image_resampled === np_segment_resampled
+        safe_crop_ending = np.clip(crop_ending, [0, 0, 0], segment_size)
+        safe_crop_range = (
+            slice(safe_crop_origin[0], safe_crop_ending[0]),
+            slice(safe_crop_origin[1], safe_crop_ending[1]),
+            slice(safe_crop_origin[2], safe_crop_ending[2])
+        )
+        # since the crop_size could be bigger than the actual prostate size, we could need to add black slices to the image
+        margin_origin = safe_crop_origin - crop_origin
+        final_origin = margin_origin * (margin_origin != 0)
+        margin_ending = safe_crop_ending - crop_ending
+        final_ending = crop_size + margin_ending * (margin_ending != 0)
+        final_crop_range = (
+            slice(final_origin[0], final_ending[0]),
+            slice(final_origin[1], final_ending[1]),
+            slice(final_origin[2], final_ending[2])
+        )
+        return safe_crop_range, final_crop_range
+
+    @staticmethod
+    def safe_crop(image, crop_size, safe_crop_range, final_range, is_segment=False):
+    
+        output_type = ImageLoader.output_image_type if not is_segment else ImageLoader.output_segment_type
+    
+        # numpy resampled images
+        np_image = ImageLoader.sitk_to_numpy(image, normalize=not is_segment).astype(output_type)
+    
+        # create the images of requested size and
+        np_image_final = np.zeros(shape=crop_size, dtype=output_type)
+        # sitk internally uses (z,y,x) coordinates, while numpy uses (x,y,z); thus, use [::-1]
+        np_image_final[final_range[::-1]] = np_image[safe_crop_range[::-1]]
+    
+        return np_image_final
 
     @staticmethod
     def RASify_image(image, is_segment=False):
@@ -55,69 +134,21 @@ class ImageLoader:
 
     @staticmethod
     def get_segment_bb(segment):
-        lssif = sitk.LabelShapeStatisticsImageFilter()
-        lssif.Execute(segment)
-        bb = lssif.GetBoundingBox(1)  # prostate label has value 1
+        ImageLoader.lssif.Execute(segment)
+        bb = ImageLoader.lssif.GetBoundingBox(label=1)  # prostate label has value 1
         origin, extent = bb[:3], bb[3:]
         return origin, extent
-
+    
     @staticmethod
-    def load_image(image_filepath, segment_filepath, spacing, size):
-
-        output_image_type = np.float16
-        output_segment_type = np.uint8
-
-        #
-        # Initial loading
-        #
-
-        # load images
-        image = sitk.ReadImage(str(image_filepath), imageIO="NrrdImageIO")
-        segment = sitk.ReadImage(str(segment_filepath), imageIO="NrrdImageIO")
-
-        # set RAS coordinates and rescale intensities
-        image = ImageLoader.RASify_image(image)
-        segment = ImageLoader.RASify_image(segment, is_segment=True)
-
-        # resample images
-        # https://simpleitk.readthedocs.io/en/v1.2.4/Documentation/docs/source/fundamentalConcepts.html
-        image_resampled = ImageLoader.resample_image(image, new_spacing=spacing)
-        segment_resampled = ImageLoader.resample_image(segment, new_spacing=spacing, is_segment=True)
-
-        # numpy resampled images
-        np_image_resampled = ImageLoader.sitk_to_numpy(image_resampled).astype(output_image_type)
-        np_segment_resampled = ImageLoader.sitk_to_numpy(segment_resampled, normalize=False).astype(output_segment_type)
-
-        #
-        # Final cropping
-        #
-
-        # crop the volume
-        seg_origin_resampled, seg_extent_resampled = ImageLoader.get_segment_bb(segment_resampled)
-        seg_center_resampled = np.array(seg_origin_resampled) + np.array(seg_extent_resampled) // 2
-        crop_size = np.array(size)
-
-        # since in the  sitk_to_numpy()  we don't use the transpose, the  crop_*  variables must refer to the (z,y,x) coordinates; thus, use [::-1]
-        # also, we must account for the  .flip() , so we also reverse the coordinates
-        seg_center_resampled = np.array(np_segment_resampled.shape) - seg_center_resampled[::-1]
-        crop_origin = seg_center_resampled - crop_size[::-1] // 2
-        crop_ending = seg_center_resampled + crop_size[::-1] // 2
-
-        safe_crop_origin = np.clip(crop_origin, [0, 0, 0], np_image_resampled.shape)
-        safe_crop_ending = np.clip(crop_ending, [0, 0, 0], np_image_resampled.shape)
-        np_image_cropped = np_image_resampled[safe_crop_origin[0]:safe_crop_ending[0], safe_crop_origin[1]:safe_crop_ending[1], safe_crop_origin[2]:safe_crop_ending[2]]
-        np_segment_cropped = np_segment_resampled[safe_crop_origin[0]:safe_crop_ending[0], safe_crop_origin[1]:safe_crop_ending[1], safe_crop_origin[2]:safe_crop_ending[2]]
-
-        # since the crop_size could be bigger than the actual prostate size, we could need to add black slices to the image
-        final_origin = - (crop_origin - safe_crop_origin) * ((crop_origin - safe_crop_origin) != 0)
-        final_ending = crop_size - (crop_ending - safe_crop_ending) * ((crop_ending - safe_crop_ending) != 0)
-
-        np_image_final = np.zeros(shape=crop_size, dtype=output_image_type)
-        np_segment_final = np.zeros(shape=crop_size, dtype=output_segment_type)
-        np_image_final[final_origin[0]:final_ending[0], final_origin[1]:final_ending[1], final_origin[2]:final_ending[2]] = np_image_cropped
-        np_segment_final[final_origin[0]:final_ending[0], final_origin[1]:final_ending[1], final_origin[2]:final_ending[2]] = np_segment_cropped
-
-        return np_image_final, np_segment_final, image, segment
+    def sitk_to_numpy(image, normalize=True):
+        # might want to read  http://simpleitk.org/SimpleITK-Notebooks/01_Image_Basics.html
+        np_image = sitk.GetArrayFromImage(image)
+        # this changes (x,y,z) to (z,y,x), which requires a  .transpose() , but since we applied a previous
+        # change to RAS we don't need it here and we simply change the orientation flipping the axes
+        #np_image = np.flip(np_image, axis=(0, 1, 2))
+        # WTF does this mean?
+        np_image = np_image.astype(float) / np.max(np_image) if normalize else np_image  # default minimum is 0
+        return np_image
 
     @staticmethod
     def load_target(image_filepath, segment_filepath, spacing, size):
@@ -176,7 +207,7 @@ class ImageLoader:
         return np_target_final, target
 
 
-class DatasetCreator:
+class DatasetMaker:
 
     def __init__(self, dataset_path: Path, dim: tuple, resampling_spacing: tuple):
         self.folder_base = dataset_path
@@ -200,8 +231,8 @@ class DatasetCreator:
             us_image_filename = list((self.folder_us / patient / us_data).rglob("US*"))[0]
             mr_prostate_filename = list((self.folder_mr / patient / mr_data).rglob("Prostate*"))[0]
             us_prostate_filename = list((self.folder_us / patient / us_data).rglob("Prostate*"))[0]
-            mr_image_cropped, mr_prostate_cropped, _, _ = ImageLoader.load_image(mr_image_filename, mr_prostate_filename, self.resampling_spacing, self.dim)
-            us_image_cropped, us_prostate_cropped, _, _ = ImageLoader.load_image(us_image_filename, us_prostate_filename, self.resampling_spacing, self.dim)
+            mr_image_cropped, mr_prostate_cropped = ImageLoader.load_sample_nrrd(mr_image_filename, mr_prostate_filename, self.resampling_spacing, self.dim)
+            us_image_cropped, us_prostate_cropped = ImageLoader.load_sample_nrrd(us_image_filename, us_prostate_filename, self.resampling_spacing, self.dim)
             # save to file
             data = {
                 "mr_image": mr_image_cropped,
@@ -265,7 +296,7 @@ class DatasetCreator:
                 print(f"done {patient}")
 
 
-class SmartDataGenerator(tf.keras.utils.Sequence):
+class Generator(tf.keras.utils.Sequence):
     """Generates data for Keras"""
     def __init__(self, data_paths, dim, batch_size=32, shuffle=True, seed=None):
         """Initialization"""
@@ -296,7 +327,7 @@ class SmartDataGenerator(tf.keras.utils.Sequence):
         patients_list = [self.patients_cases[k] for k in indexes]
 
         # Generate data
-        inputs, outputs, mr_targets, us_targets = self.__data_generation(patients_list, output_targets=output_targets)
+        inputs, outputs, mr_targets, us_targets = self._data_generation(patients_list, output_targets=output_targets)
 
         return inputs, outputs, mr_targets, us_targets, patients_list
 
@@ -307,7 +338,7 @@ class SmartDataGenerator(tf.keras.utils.Sequence):
                 np.random.seed(self.seed)
             np.random.shuffle(self.indexes)
 
-    def __data_generation(self, patients_list, output_targets=False):
+    def _data_generation(self, patients_list, output_targets=False):
         """Generates data containing batch_size samples"""
         # X : (n_samples, *dim, n_channels)
         moving_images = np.zeros(shape=(self.batch_size, *self.dim, 1))
@@ -322,8 +353,7 @@ class SmartDataGenerator(tf.keras.utils.Sequence):
         re_filter_mr = re.compile('^mr_target.*$')
         re_filter_us = re.compile('^us_target.*$')
         for i, data_path in enumerate(patients_list):
-            mr_image_crop, mr_prostate_crop, us_image_crop, us_prostate_crop, targets = \
-                SmartDataGenerator.single_load(data_path)
+            mr_image_crop, mr_prostate_crop, us_image_crop, us_prostate_crop, targets = Generator.single_load(data_path)
             # images need to be of the size [batch_size, H, W, D, 1]
             moving_images[i, ..., 0] = mr_image_crop
             fixed_images[i, ..., 0] = us_image_crop
@@ -365,7 +395,7 @@ class SmartDataGenerator(tf.keras.utils.Sequence):
 
     @staticmethod
     def single_input(path):
-        mr_image, mr_prostate, us_image, us_prostate, _ = SmartDataGenerator.single_load(path)
+        mr_image, mr_prostate, us_image, us_prostate, _ = Generator.single_load(path)
         return [mr_image, us_image, mr_prostate]
 
 
@@ -444,9 +474,9 @@ def prepare_model(inshape, sim_param=1.0, lambda_param=0.05, gamma_param=0.01):
     tf.keras.backend.clear_session()
 
     # same as default
-    # enc_nf = [16, 32, 32, 32]
-    # dec_nf = [32, 32, 32, 32, 32, 16, 16]
-
+    enc_nf = [16, 32, 32, 32]
+    dec_nf = [32, 32, 32, 32, 32, 16, 16]
+    
     vxm_model = vxm.networks.VxmDenseSemiSupervisedSeg(
         inshape=inshape, nb_labels=1,
         # nb_unet_features=[enc_nf, dec_nf],
@@ -456,8 +486,9 @@ def prepare_model(inshape, sim_param=1.0, lambda_param=0.05, gamma_param=0.01):
     # assigning loss
     bin_centers = np.linspace(0, 1, 32)  # histogram bins, assume normalized images
     loss_mi = vxm.losses.NMI(bin_centers=bin_centers, vol_size=inshape).loss
+    loss_smooth = vxm.losses.Grad('l2').loss
     loss_dice = vxm.losses.Dice().loss
-    losses = [loss_mi, vxm.losses.Grad('l2').loss, loss_dice]
+    losses = [loss_mi, loss_smooth, loss_dice]
     loss_weights = [sim_param, lambda_param, gamma_param]
 
     # assigning metrics
@@ -478,26 +509,25 @@ def prepare_model(inshape, sim_param=1.0, lambda_param=0.05, gamma_param=0.01):
     return vxm_model
 
 
-def split_dataset(dataset_folder, train_test_split=0.95, train_val_split=0.90, seed=None, reshuffle=True):
-    full_data = np.array(sorted(dataset_folder.iterdir()))
-    if seed is not None:
-        np.random.seed(seed)
-
-    # split train/test
-    np.random.shuffle(full_data)
-    idx = [int(train_test_split * full_data.shape[0])]
-    train_data, test_data = np.split(full_data, idx)
-
-    # split train/validation
-    if reshuffle:
-        np.random.shuffle(train_data)
-    idx = [int(train_val_split * train_data.shape[0])]
-    train_data, validation_data = np.split(train_data, idx)
-
-    # idx = (np.array([train_test_split * train_val_split, train_test_split]) * full_data.shape[0]).astype(int)
-    # train_data, validation_data, test_data = np.split(full_data, idx)
-
-    return train_data, validation_data, test_data
+class DatasetCreator:
+    
+    @staticmethod
+    def split_dataset(dataset_folder, train_test_split=0.95, train_val_split=0.90, seed=None):
+        
+        full_data = np.array(dataset_folder.iterdir())
+        if seed is not None:
+            np.random.seed(seed)
+        np.random.shuffle(full_data)
+        
+        # split train/test
+        idx = [int(train_test_split * full_data.shape[0])]
+        train_data, test_data = np.split(full_data, idx)
+    
+        # split train/validation
+        idx = [int(train_val_split * train_data.shape[0])]
+        train_data, validation_data = np.split(train_data, idx)
+    
+        return train_data, validation_data, test_data
 
 #
 # EVALUATION

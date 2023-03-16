@@ -2,21 +2,22 @@ from pathlib import Path
 
 import tensorflow as tf
 
-from notebooks.utils import SmartDataGenerator, split_dataset, prepare_model
+from notebooks.utils import Generator, DatasetCreator, prepare_model
 
 
 #####
 # dataset setup
 #####
 
-SEED = 24052022
-base_folder = Path(r"C:\Users\ML\Desktop\seba_preprocessed_fusion\numpy_160")
-train_data, validation_data, test_data = split_dataset(base_folder, train_test_split=0.95, train_val_split=0.90, seed=SEED)
-
 size = (160, 160, 160)
-train_generator = SmartDataGenerator(train_data, dim=size, batch_size=1, seed=SEED)
-validation_generator = SmartDataGenerator(validation_data, dim=size, batch_size=1, seed=SEED)
-test_generator = SmartDataGenerator(test_data, dim=size, batch_size=1, seed=SEED)
+# SEED = 24052022
+# # base_folder = Path(r"C:\Users\ML\Desktop\seba_preprocessed_fusion\numpy_160")
+# base_folder = Path(r"R:\DATASET_PROSTATE\numpy_160")
+# train_data, validation_data, test_data = DatasetCreator.split_dataset(base_folder, train_test_split=0.95, train_val_split=0.90, seed=SEED)
+#
+# train_generator = OnDemandGenerator(train_data, dim=size, batch_size=1, seed=SEED)
+# validation_generator = OnDemandGenerator(validation_data, dim=size, batch_size=1, seed=SEED)
+# test_generator = OnDemandGenerator(test_data, dim=size, batch_size=1, seed=SEED)
 
 
 #####
